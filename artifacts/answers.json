@@ -1,0 +1,54 @@
+[
+  {
+    "id": 1,
+    "question": "What authentication methods does the API support?",
+    "answer": "The ForgeNest API authentication methods support API keys and OAuth 2.0. Use API keys for server integrations and OAuth 2.0 for delegated user access. Send an API key in the Authorization header as a Bearer token.",
+    "supported": true,
+    "citations": [
+      "chunk_2"
+    ]
+  },
+  {
+    "id": 2,
+    "question": "How long are webhook delivery logs retained?",
+    "answer": "Webhook delivery logs are retained for 30 days and can be viewed in the dashboard. Each delivery log includes the event identifier, attempt timestamp, HTTP status, and response duration. Failed webhook deliveries are retried up to 5 times over 24 hours.",
+    "supported": true,
+    "citations": [
+      "chunk_6"
+    ]
+  },
+  {
+    "id": 3,
+    "question": "Is there a free plan for startups?",
+    "answer": "ForgeNest offers a free Startup plan for startups at $0 per month, including 1000 API requests per day and 1 project. The Pro plan costs $49 per month, including 10000 API requests per day and 10 projects. The Business plan costs $199 per month, including 100000 API requests per day and 50 projects.",
+    "supported": true,
+    "citations": [
+      "chunk_5"
+    ]
+  },
+  {
+    "id": 4,
+    "question": "What happens if I exceed the rate limit?",
+    "answer": "The API rate limit is 60 requests per minute for Startup, 300 for Pro, and 1000 for Business, measured per workspace. If you exceed the rate limit, the API returns HTTP 429 with a Retry-After header specifying how many seconds to wait before retrying.",
+    "supported": true,
+    "citations": [
+      "chunk_1"
+    ]
+  },
+  {
+    "id": 5,
+    "question": "Can I delete customer data immediately on request?",
+    "answer": "You cannot delete customer data immediately on request: deletion from active systems takes up to 7 days after approval, and backup copies expire within 30 days. To request deletion of customer data, a workspace administrator must open Settings > Privacy > Delete data and submit the customer identifier. The deletion request is reviewed within 2 business days; the administrator receives confirmation when active-system deletion completes.",
+    "supported": true,
+    "citations": [
+      "chunk_3"
+    ]
+  },
+  {
+    "id": 6,
+    "question": "Does the platform support GraphQL subscriptions?",
+    "answer": "The knowledge base does not provide enough information to answer this.",
+    "supported": false,
+    "citations": []
+  }
+]

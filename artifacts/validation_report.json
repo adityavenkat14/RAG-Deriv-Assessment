@@ -1,0 +1,57 @@
+{
+  "checks": [
+    {
+      "name": "Required files exist",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "JSON and JSONL syntax",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "Document/chunk schemas, IDs and offsets",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "Exactly one answer per valid question",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "Retrieval coverage, limits and source integrity",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "Citation IDs and support flags",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "Citation validation coverage and recomputed grounding",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "Final answer coverage and consistency",
+      "passed": true,
+      "issues": []
+    },
+    {
+      "name": "LLM call logging matches run mode",
+      "passed": true,
+      "issues": []
+    }
+  ],
+  "summary": {
+    "documents": 5,
+    "chunks": 6,
+    "questions": 6,
+    "supported_answers": 5,
+    "validation_failures": 0,
+    "failed_artifact_checks": 0
+  }
+}

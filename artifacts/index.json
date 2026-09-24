@@ -1,0 +1,9 @@
+{
+  "method": "BM25",
+  "num_chunks": 6,
+  "vocabulary_size": 159,
+  "parameters": {
+    "k1": 1.5,
+    "b": 0.75
+  }
+}

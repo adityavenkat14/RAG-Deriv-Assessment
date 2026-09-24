@@ -1,0 +1,6 @@
+# API rate limits
+
+The API rate limit is 60 requests per minute for Startup, 300 for Pro, and 1000 for Business, measured per workspace.
+If you exceed the rate limit, the API returns HTTP 429 with a Retry-After header specifying how many seconds to wait before retrying.
+Requests rejected with HTTP 429 do not count toward the daily request quota.
+When the daily quota is exhausted, requests return HTTP 429 until the quota resets at midnight UTC.

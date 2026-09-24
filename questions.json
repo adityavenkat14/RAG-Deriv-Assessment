@@ -1,0 +1,8 @@
+[
+  { "id": 1, "question": "What authentication methods does the API support?" },
+  { "id": 2, "question": "How long are webhook delivery logs retained?" },
+  { "id": 3, "question": "Is there a free plan for startups?" },
+  { "id": 4, "question": "What happens if I exceed the rate limit?" },
+  { "id": 5, "question": "Can I delete customer data immediately on request?" },
+  { "id": 6, "question": "Does the platform support GraphQL subscriptions?" }
+]
