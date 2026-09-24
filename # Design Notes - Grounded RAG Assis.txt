@@ -1,0 +1,201 @@
+# Design Notes - Grounded RAG Assistant
+
+These notes explain why the pipeline is built the way it is. For setup and usage, see `README.md`.
+
+---
+
+## 1. Goal
+
+Answer questions using **only** a local knowledge base (`docs/`), and make every answer **traceable** and **verifiable**:
+
+- every answer cites the chunk IDs it came from
+- when the docs don't cover a question, the assistant says so instead of guessing
+- a deterministic step checks every answer's citations, numbers and wording against the source
+
+Constraints: Python 3, standard-library retrieval (no LangChain, LlamaIndex or vector DB), API keys only in the environment, small enough to understand in one sitting, and it must still run with no API key at all.
+
+---
+
+## 2. Architecture
+
+```
+ docs/*.md|*.txt      questions.json
+        |                   |
+        v                   |
+ [2] DOCUMENTS_LOADED       |
+        v                   |
+ [3] CHUNKS_CREATED         |
+        v                   |
+ [4] INDEX_BUILT (BM25)     |
+        |                   v
+        |           [5] QUESTIONS_LOADED
+        |                   |
+        +-------> [6] RETRIEVAL_COMPLETE (top 3 per question)
+                            v
+                  [7] ANSWERS_GENERATED  -- LLM (Groq / Anthropic) or rule-based
+                            v
+                  [8] CITATIONS_VALIDATED -- deterministic grounding checks
+                            v
+                  [9] RESULTS_EXPORTED
+                            v
+                  [10] VALIDATION_COMPLETE -- validate.py checks + summary
+```
+
+| File | Role |
+|---|---|
+| `pipeline.py` | All 10 stages, the providers and the grounding checks |
+| `validate.py` | Structural checks on the artifacts. Runs on its own, and is also imported by stage 10. |
+| `run.py` | Entry point. Turns any failure into a non-zero exit code. |
+| `artifacts/` | The saved output of every stage |
+
+---
+
+## 3. Key design decisions
+
+### 3.1 Explicit, ordered stages
+- **Order is enforced in code:** the order lives in a `STAGES` list. Each stage function calls `enter_stage()` first, and that raises `PipelineError` if the stage isn't the next one.
+- **Every stage saves its output** before the next starts.
+
+**Why:** retrieval and generation can't quietly merge into one hidden step. When something goes wrong, you open the previous stage's JSON and see exactly what it received.
+
+### 3.2 Deterministic everywhere except the model call
+Loading, chunking, indexing, retrieval and validation give the same output for the same input:
+- files are sorted by path
+- chunk IDs come from a global counter over sorted documents
+- retrieval ties are broken by chunk number
+- questions are sorted by ID
+
+**Why:** reproducible runs, stable chunk IDs across runs (so citations stay meaningful), and easy diffing of artifacts.
+
+### 3.3 Character chunking with boundary snapping
+- **Size:** `CHUNK_SIZE = 500`, `CHUNK_OVERLAP = 100`.
+- **Where a chunk ends:** in the chunk's second half, at the last paragraph break. If there is none, the last sentence or line end, then the last space. Words are never cut.
+- **Offsets are exact:** `text == document_text[start_char:end_char]`. Leading and trailing whitespace is trimmed by moving the offsets, not by editing the text.
+
+**Why:** plain character chunks cut words and sentences in half, which hurts both retrieval and readable citations. Snapping keeps chunks coherent without needing a tokenizer or an NLP library. Exact offsets let anyone jump from a citation back to its source.
+
+**Trade-off:** chunks vary in size (at least half of `CHUNK_SIZE`, at most `CHUNK_SIZE`).
+
+### 3.4 BM25 written by hand
+- **Tokenising:** lowercase, split on `[a-z0-9]+`, remove a small stopword list, and strip a plural `s`.
+- **Scoring:** BM25 with `k1 = 1.5` and `b = 0.75`, and a smoothed idf that is always positive.
+- **Selection:** top `TOP_K = 3` chunks, zero scores dropped, scores divided by the question's top score.
+
+**Why BM25 instead of TF-IDF with cosine:** BM25 handles term frequency with diminishing returns and adjusts for chunk length. It is the standard baseline for keyword retrieval and is only about 20 lines of code.
+
+**Why no embeddings:** the brief ruled out heavy frameworks. On a small, focused knowledge base, keyword matching works well: all 6 sample questions retrieved the right document first.
+
+**Known weakness:** synonyms. "Cost" won't match "price" unless both words appear in the text.
+
+### 3.5 One LLM call per question, with a narrow context
+- **Separate calls:** each call carries one question plus its (at most 3) chunks, each labelled `[chunk_N]`.
+- **No batching:** questions are never combined into one call.
+
+**Why:**
+- the model only sees context relevant to that question
+- one bad reply affects one answer
+- each call is logged separately, so you can audit it
+
+### 3.6 Prompt and output contract
+The system prompt tells the model to:
+- answer only from the context
+- say when the answer isn't supported, using an exact fixed sentence
+- cite only chunk IDs it was given
+- never invent features, prices, limits or policies
+- return JSON only: `{"answer", "supported", "citations"}`
+
+The model's reply is handled like this:
+- **Parsing:** fences are stripped, the JSON object is found, and each field's type is checked.
+- **Retry once:** on a parse error, API error, refusal or truncated reply.
+- **Then give up safely:** if both attempts fail, the fixed "not enough information" answer is used.
+- **Citations are never repaired:** only duplicates are removed. Invented citations are left for validation to catch, so problems stay visible instead of being quietly fixed.
+
+### 3.7 Grounding validation (stage 8)
+Checks for each answer:
+
+| Check | Catches |
+|---|---|
+| Cited chunk was retrieved for this question | Invented or out-of-scope citations |
+| Supported answer has at least one citation | Uncited claims |
+| Unsupported answer has no citations | Contradictory output |
+| **Numbers:** every number in the answer appears in the cited text | Invented prices, limits, durations |
+| **Keywords:** at least 50% of the answer's content words appear in the cited text | Answers drifting away from the source |
+
+**Why numbers get special treatment:** wrong numbers are the most damaging and most common hallucination in product docs (prices, limits, day counts), and they are easy to check with a regex.
+
+**Severity:**
+- grounding issues are recorded as quality flags in `citation_validation.json` and don't stop the run on their own
+- structural failures in `validate.py`, such as a citation to a chunk that wasn't retrieved, **fail the run** with a non-zero exit code
+
+### 3.8 Rule-based fallback (no API key)
+1. Take the top retrieved chunk.
+2. Compute the fraction of question keywords found in it.
+3. If that is below `0.6`, return the unsupported answer.
+4. Otherwise return the 1–2 sentences with the most keyword matches, skipping headings, and cite that chunk.
+
+**Why:** the pipeline must run with no network access, and extractive answers are grounded by construction.
+
+**Trade-off:** it can't combine facts from two chunks. In the sample, Q1 misses the Startup price, which the LLM answer includes.
+
+### 3.9 More than one LLM provider
+- **Providers:** `PROVIDERS` maps each provider to its key's environment variable and a default model (Anthropic → `claude-opus-5`, Groq → `openai/gpt-oss-120b`).
+- **Choosing:** `LLM_PROVIDER` picks one. If it's blank, the first provider with a key set is used.
+- **One pipeline:** `call_llm()` sends each call to the right provider. Parsing, logging, retries and validation are shared.
+- **Groq specifics:** JSON mode (`response_format=json_object`), `temperature=0`, and a 4,096-token output limit (reasoning models spend tokens on thinking before they answer).
+- **SDK retries are off** (`max_retries=0`) so the pipeline's single retry is the only one and every attempt appears in the log.
+
+### 3.10 Handling errors
+| Situation | Behaviour |
+|---|---|
+| `docs/` missing or no usable files | Clear `PipelineError`, exit 1 |
+| Empty or unreadable doc | Warning, skipped |
+| Malformed or duplicate question | Warning, skipped |
+| Question retrieves no chunks | No LLM call, unsupported answer |
+| HTTP 429 | Wait for `Retry-After` (default 5s, at most 60s), retry once |
+| Other API or connection error, bad JSON | Retry once, then unsupported answer |
+| Key set but SDK not installed | Warning, rule-based mode |
+| Unexpected exception | `run.py` prints the traceback, exit 1 |
+
+### 3.11 Logging and auditability
+- **One record per attempt:** `llm_calls.jsonl` gets a record for every call attempt, retries included, never one record for several questions.
+- **Fields:** timestamp, provider, model, question ID, SHA-256 of the full prompt, input and output artifacts, attempt number and status.
+- **Rule-based mode:** the log is left empty and nothing fake is written.
+- **Run settings:** `run_config.json` records the mode and constants, so `validate.py` knows which log rules apply.
+
+---
+
+## 4. Security and privacy
+- Keys come only from the environment or `.env`. `.env` is git-ignored, and `.env.example` has no secrets.
+- No scraping and no outside data: every input is a local file.
+- No keys or personal data appear in logs. Prompts are logged only as hashes.
+
+---
+
+## 5. Verification done
+
+| Test | Result |
+|---|---|
+| Rule-based run (no key) | 14/14 checks, 5 answered + 1 correctly declined |
+| Chunk offsets | `doc[start:end] == text` for all 15 chunks |
+| Stand-in Anthropic client: bad JSON, API error, invented `chunk_999`, invented number `999`, duplicate citations, two failures in a row | All detected or handled as designed; the invented citation fails the run |
+| Stand-in Groq client: JSON mode, HTTP 503 retry | Passed, retry logged |
+| **Live Groq run** (`openai/gpt-oss-120b`) | 6 calls, 5 grounded answers + Q6 correctly declined, 0 citation failures, 14/14 checks |
+
+Real-world problems found during the live run and fixed:
+1. The original Groq default model (`llama-3.3-70b-versatile`) had been retired (HTTP 404), so the default changed to `openai/gpt-oss-120b`.
+2. A free-tier rate limit (HTTP 429) broke immediate retries, so retries now wait for `Retry-After`.
+
+---
+
+## 6. Known limitations
+- **Keyword retrieval only:** synonyms and paraphrases can be missed.
+- **Light stemming only:** just the plural `s`.
+- **Grounding checks are simple word matches:** a paraphrased but correct answer could fall under the 50% keyword threshold, and a wrong claim made of words from the source would pass. The checks catch the common failures, not all of them.
+- **Extractive fallback** can't combine facts from several chunks.
+- **Default model names** can be retired by the provider; override them with `LLM_MODEL`.
+
+## 7. Possible next steps
+- Add a Gemini provider (one more entry in `PROVIDERS` plus a `call_gemini()`).
+- Add an eval set of questions with expected answers, to measure retrieval hit rate and answer accuracy.
+- Tune `CHUNK_SIZE`, `TOP_K` and the thresholds against that eval set.
+- Optional hybrid retrieval (BM25 + embeddings), if the no-heavy-dependencies rule is relaxed.
